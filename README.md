@@ -51,8 +51,11 @@ The two approaches are available in `02_pc_data.sh`. `PDAL` is used by default i
 
 #### Extracting tiles with PDAL wrench
 
-* PDAL wrench uses a VPC file that indexes all COPC files. This global COPC is not provided by IGNF as of now. A script is provided in this example to create this full VPC
+* PDAL wrench uses a VPC file that indexes all COPC files. This global VPC is not provided by IGNF as of now. `scripts/generate_build_vpc_commands_wfs.py` builds it by querying the [IGNF Geoplateforme WFS](https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities) (`IGNF_LIDAR-HD_METADONNEE:metadata` layer) to list the COPC download urls of every LIDAR HD tile (mainland France and overseas territories), then generates chunked `pdal_wrench build_vpc` commands that are run in parallel and merged with `scripts/merge_vpc_files.py`
 * PDAL wrench `clip` operation is multi-threaded but not the `merge` operation. As a result, the optimal way to use this tool would be to launch some operations sequentially and others in parallel. 
+* Building the global VPC fetches the COPC header of every tile over HTTP(S). `data.geopf.fr` intermittently answers `429 Too Many Requests`, and `pdal_wrench build_vpc` aborts an entire chunk (no partial output) on the first failed file. To absorb this, `02_pc_data.sh` runs this step sequentially (`build_vpc_parallel_jobs=1`, with `build_vpc_delay_seconds` between chunk launches), and `scripts/generate_build_vpc_commands_wfs.py` uses small chunks (`--chunk_size`, default 10 urls) and wraps each `pdal_wrench build_vpc` call (`--threads 1`) in a retry loop with linear backoff (`--max_retries` / `--retry_backoff_seconds`) so a transient 429 only redoes a small chunk instead of failing the whole run. Some WFS urls point to tiles that no longer exist on `data.geopf.fr` (`404 Not Found`); this is not transient, so the retry loop detects it and gives up on the chunk immediately instead of exhausting `--max_retries`
+* This step is lengthy (~1.5h) and runs `GNU parallel` with `--bar` to show a live progress bar (percentage of chunks done, ETA). At the end, a summary line reports how many chunks succeeded/failed (parsed from `build_vpc_logs/parallel.log`, the `--joblog` file); per-chunk retry details are in `build_vpc_logs/*.log`
+* Use `scripts/generate_build_vpc_commands_wfs.py --limit N` to only process the first N COPC urls, e.g. to test the pipeline on a handful of tiles before running it on the full ~507k tiles
 
 ## 3D building reconstruction
 
